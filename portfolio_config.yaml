@@ -1,0 +1,84 @@
+# Portfolio Configuration
+
+# Data Settings
+data:
+  source: 'pandas_reader'  # Options: 'alpha_vantage', 'pandas_reader'
+  api_key: 'YOUR_ALPHA_VANTAGE_API_KEY'
+  start_date: '2020-01-01'
+  end_date: '2023-12-31'
+
+# Asset Settings
+assets:
+  - ticker: 'AAPL'
+    name: 'Apple Inc.'
+    type: 'equity'
+    sector: 'Technology'
+  - ticker: 'MSFT'
+    name: 'Microsoft Corporation'
+    type: 'equity'
+    sector: 'Technology'
+  - ticker: 'GOOGL'
+    name: 'Alphabet Inc.'
+    type: 'equity'
+    sector: 'Technology'
+  - ticker: 'BND'
+    name: 'Vanguard Total Bond Market'
+    type: 'bond'
+    duration: 6.8
+  - ticker: 'GLD'
+    name: 'SPDR Gold Shares'
+    type: 'commodity'
+
+# Optimization Settings
+optimization:
+  risk_free_rate: 0.02
+  rebalance_frequency: '1M'  # Options: '1D', '1W', '1M', '3M'
+  window_days: 28
+  constraints:
+    min_weight: 0.0
+    max_weight: 0.4
+    max_sector_weight: 0.5
+
+# Backtest Settings
+backtest:
+  initial_capital: 1000000
+  transaction_cost: 0.001  # 0.1% per trade
+  enable_short_selling: false
+  risk_constraints:
+    max_drawdown: 0.2
+    max_volatility: 0.15
+
+# Visualization Settings
+visualization:
+  style: 'default'  # Options: 'default', 'dark_background', 'seaborn'
+  plot_width: 12
+  plot_height: 6
+  save_plots: true
+  plot_directory: 'portfolio_plots'
+
+# Logging Settings
+logging:
+  level: 'INFO'  # Options: 'DEBUG', 'INFO', 'WARNING', 'ERROR'
+  log_file: 'portfolio.log'
+  console_output: true
+  file_output: true
+
+# Performance Monitoring
+monitoring:
+  enable_performance_tracking: true
+  metrics:
+    - 'sharpe_ratio'
+    - 'sortino_ratio'
+    - 'max_drawdown'
+    - 'volatility'
+    - 'beta'
+    - 'alpha'
+  alert_thresholds:
+    max_drawdown: 0.1
+    daily_loss: 0.02
+
+# Debug Settings
+debug:
+  verbose: false
+  save_intermediate_results: false
+  profile_performance: false
