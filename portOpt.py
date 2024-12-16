@@ -13,6 +13,11 @@ import seaborn as sns
 import time
 import pandas_datareader.data as web
 from alpha_vantage.timeseries import TimeSeries
+from abc import ABC, abstractmethod
+import logging
+import unittest
+import functools
+import yaml
 
 # ... (保留现有的导入语句) ...
 
@@ -20,6 +25,137 @@ from alpha_vantage.timeseries import TimeSeries
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Union, Optional
+
+class PortfolioLogger:
+    def __init__(self, name: str):
+        self.logger = logging.getLogger(name)
+        self.logger.setLevel(logging.DEBUG)
+        
+        # Create logs directory if it doesn't exist
+        log_dir = 'logs'
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            print(f"Created log directory: {log_dir}")
+        
+        # Create file handler
+        log_file = os.path.join(log_dir, f'{name}.log')
+        try:
+            fh = logging.FileHandler(log_file)
+            fh.setLevel(logging.DEBUG)
+            
+            # Create console handler
+            ch = logging.StreamHandler()
+            ch.setLevel(logging.INFO)
+            
+            # Create formatter
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            fh.setFormatter(formatter)
+            ch.setFormatter(formatter)
+            
+            # Add handlers to logger
+            self.logger.addHandler(fh)
+            self.logger.addHandler(ch)
+            
+            self.logger.info(f"Logger initialized. Log file: {log_file}")
+            
+        except Exception as e:
+            print(f"Error setting up logger: {str(e)}")
+            raise
+
+class PortfolioError(Exception):
+    """Base exception class for portfolio operations"""
+    pass
+
+class DataFetchError(PortfolioError):
+    """Error when fetching market data"""
+    pass
+
+class OptimizationError(PortfolioError):
+    """Error during portfolio optimization"""
+    pass
+
+class PortfolioMonitor:
+    def __init__(self):
+        self.metrics = {}
+        self.logger = PortfolioLogger("PortfolioMonitor")
+    
+    def record_metric(self, name: str, value: float, timestamp: datetime = None):
+        if timestamp is None:
+            timestamp = datetime.now()
+        if name not in self.metrics:
+            self.metrics[name] = []
+        self.metrics[name].append((timestamp, value))
+        self.logger.logger.debug(f"Recorded metric {name}: {value}")
+    
+    def get_metric_history(self, name: str) -> List[tuple]:
+        return self.metrics.get(name, [])
+
+class PortfolioConfig:
+    def __init__(self, config_file: str = 'portfolio_config.yaml'):
+        self.config_file = config_file
+        self.config = self._load_config()
+        
+    def _load_config(self) -> dict:
+        """Load configuration from YAML file"""
+        try:
+            with open(self.config_file, 'r') as file:
+                config = yaml.safe_load(file)
+            return config
+        except Exception as e:
+            raise ValueError(f"Failed to load config file: {str(e)}")
+    
+    def get(self, key: str, default=None):
+        """Get configuration value using dot notation
+        
+        Example:
+            config.get('data.source')
+            config.get('optimization.risk_free_rate')
+        """
+        try:
+            keys = key.split('.')
+            value = self.config
+            for k in keys:
+                value = value[k]
+            return value
+        except (KeyError, TypeError):
+            return default
+            
+    def get_assets(self) -> List[Dict]:
+        """Get list of assets from config"""
+        return self.config.get('assets', [])
+        
+    def get_optimization_params(self) -> Dict:
+        """Get optimization parameters"""
+        return self.config.get('optimization', {})
+        
+    def get_backtest_params(self) -> Dict:
+        """Get backtest parameters"""
+        return self.config.get('backtest', {})
+
+class TestPortfolioOptimizer(unittest.TestCase):
+    def setUp(self):
+        self.config = PortfolioConfig('test_config.yaml')
+        self.monitor = PortfolioMonitor()
+        
+    def test_optimization(self):
+        # Test optimization logic
+        pass
+    
+    def test_data_fetching(self):
+        # Test data fetching
+        pass
+
+def performance_monitor(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        duration = end_time - start_time
+        logger = logging.getLogger(func.__module__)
+        logger.debug(f"{func.__name__} took {duration:.2f} seconds to execute")
+        return result
+    return wrapper
 
 class Asset(ABC):
     """Base Asset Class"""
@@ -163,13 +299,12 @@ class MarketEnvironment:
     """Market Environment class for fetching and managing market data"""
     
     def __init__(self, assets: List[Asset], start_date: str, end_date: str, 
-                 data_source: str = 'alpha_vantage', debug: bool = False):
+                 data_source: str = 'yfinance', debug: bool = False):
         self.assets = assets
         self.start_date = start_date
         self.end_date = end_date
         self.data_source = data_source
         self.debug = debug
-        self.api_key = 'YOUR_ALPHA_VANTAGE_API_KEY'  # Need to replace with actual API key
         self.data = self._fetch_data()
         if self.debug:
             self.visualize_data()
@@ -208,13 +343,13 @@ class MarketEnvironment:
         plt.show()
 
     def get_returns(self, debug: bool = False) -> pd.DataFrame:
-        """计算资产的每日收益率
+        """Calculate daily returns for assets
         
         Args:
-            debug: 是否显示可视化图表，默认为False
+            debug: Whether to display visualization charts, default False
         
         Returns:
-            pd.DataFrame: 包含所有资产每日收益率的DataFrame
+            pd.DataFrame: DataFrame containing daily returns for all assets
         """
         # 计算收益率
         returns = self.data.pct_change()
@@ -229,7 +364,7 @@ class MarketEnvironment:
             plt.grid(True)
             plt.show()
             
-            # 绘制收益率时间序列图
+            # 绘制收益率时间序列
             plt.figure(figsize=(12, 6))
             returns.plot()
             plt.title('资产收益率时间序列')
@@ -313,7 +448,7 @@ class MarketEnvironment:
             if data.empty:
                 raise ValueError("No asset data retrieved")
 
-            # 确保数据按日期升序排列
+            # 确保数据按序排列
             data = data.sort_index(ascending=True)
 
             # 检查并处理缺失值
@@ -328,49 +463,36 @@ class MarketEnvironment:
 
         except Exception as e:
             raise ValueError(f"Error occurred while fetching data: {str(e)}")
-class PortfolioOptimizer:
-    """Portfolio Optimizer"""
-    
-    def __init__(self, market_env: MarketEnvironment):
-        self.market_env = market_env
-        self.returns = market_env.get_returns()
-        
-    def optimize_sharpe(self, risk_free_rate: float = 0.02, window_days: int = 30, current_date: pd.Timestamp = None) -> Dict:
-        """基于定时间窗口优化投资组合权重
+
+# 优化策略的抽取
+class OptimizationStrategy(ABC):
+    @abstractmethod
+    def optimize(self, returns: pd.DataFrame, risk_free_rate: float) -> Dict:
+        """优化投资组合权重的抽象方法"""
+        pass
+
+# 夏普比率优化策略
+class SharpeOptimizationStrategy(OptimizationStrategy):
+    def optimize(self, returns: pd.DataFrame, risk_free_rate: float = 0.02) -> Dict:
+        """基于夏普比率优化投资组合
         
         Args:
+            returns: 收益率数据
             risk_free_rate: 无风险利率
-            window_days: 回溯时间窗口天数
-            current_date: 当前日期，如果为None则使用数据中的最后一个日期
             
         Returns:
             Dict: 优化后的资产权重字典
         """
-        if current_date is None:
-            current_date = self.returns.index[-1]
-            
-        # 获取时间窗口内的收益率数据
-        end_date = current_date
-        start_date = current_date - pd.Timedelta(days=window_days)
-        window_returns = self.returns[
-            (self.returns.index >= start_date) & 
-            (self.returns.index <= end_date)
-        ]
-        
-        # 检查是否有足够的数据
-        if len(window_returns) < 5:  # 至少需要5个交易日的数据
-            raise ValueError(f"不够的数据点用于优化 (got {len(window_returns)})")
-            
-        n_assets = len(self.market_env.assets)
+        n_assets = returns.shape[1]
         
         def objective(weights):
-            portfolio_return = np.sum(window_returns.mean() * weights) * 252
-            portfolio_vol = np.sqrt(np.dot(weights.T, np.dot(window_returns.cov() * 252, weights)))
+            portfolio_return = np.sum(returns.mean() * weights) * 252
+            portfolio_vol = np.sqrt(np.dot(weights.T, np.dot(returns.cov() * 252, weights)))
             sharpe = (portfolio_return - risk_free_rate) / portfolio_vol
-            return -sharpe  # 最小化负夏普比率 = 最大化夏普比率
+            return -sharpe
         
-        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})  # 权重和为1
-        bounds = tuple((0, 1) for _ in range(n_assets))  # 权重在0和1之间
+        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        bounds = tuple((0, 1) for _ in range(n_assets))
         
         try:
             result = minimize(objective, 
@@ -380,26 +502,140 @@ class PortfolioOptimizer:
                             constraints=constraints)
             
             if not result.success:
-                print(f"优化警告: {result.message}")
+                print(f"Optimization Warning: {result.message}")
                 
-            # 返回优化结果
-            return dict(zip([asset.ticker for asset in self.market_env.assets], result.x))
+            return dict(zip(returns.columns, result.x))
             
         except Exception as e:
-            print(f"优化错误: {str(e)}")
-            # 如果优化失败，返回平均分配的权重
-            return dict(zip([asset.ticker for asset in self.market_env.assets], 
-                          [1/n_assets] * n_assets))
+            print(f"Optimization Error: {str(e)}")
+            return dict(zip(returns.columns, [1/n_assets] * n_assets))
+
+# 最小方差优化策略
+class MinVarianceOptimizationStrategy(OptimizationStrategy):
+    def optimize(self, returns: pd.DataFrame, risk_free_rate: float = 0.02) -> Dict:
+        """基于最小方差优化投资组合"""
+        n_assets = returns.shape[1]
+        
+        def objective(weights):
+            return np.sqrt(np.dot(weights.T, np.dot(returns.cov() * 252, weights)))
+        
+        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        bounds = tuple((0, 1) for _ in range(n_assets))
+        
+        try:
+            result = minimize(objective, 
+                            x0=np.array([1/n_assets] * n_assets),
+                            method='SLSQP',
+                            bounds=bounds,
+                            constraints=constraints)
+            
+            if not result.success:
+                print(f"Optimization Warning: {result.message}")
+                
+            return dict(zip(returns.columns, result.x))
+            
+        except Exception as e:
+            print(f"Optimization Error: {str(e)}")
+            return dict(zip(returns.columns, [1/n_assets] * n_assets))
+
+# 最大化收益优化策略
+class MaxReturnOptimizationStrategy(OptimizationStrategy):
+    def optimize(self, returns: pd.DataFrame, risk_free_rate: float = 0.02) -> Dict:
+        """Optimize portfolio based on maximum return
+        
+        Args:
+            returns: Returns data
+            risk_free_rate: Risk-free rate (not used in this strategy)
+            
+        Returns:
+            Dict: Dictionary of optimized asset weights
+        """
+        n_assets = returns.shape[1]
+        
+        def objective(weights):
+            portfolio_return = np.sum(returns.mean() * weights) * 252
+            return -portfolio_return  # Negative because we minimize
+        
+        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        bounds = tuple((0, 1) for _ in range(n_assets))
+        
+        try:
+            result = minimize(objective, 
+                            x0=np.array([1/n_assets] * n_assets),
+                            method='SLSQP',
+                            bounds=bounds,
+                            constraints=constraints)
+            
+            if not result.success:
+                print(f"Optimization Warning: {result.message}")
+                
+            return dict(zip(returns.columns, result.x))
+            
+        except Exception as e:
+            print(f"Optimization Error: {str(e)}")
+            return dict(zip(returns.columns, [1/n_assets] * n_assets))
+
+# 修改后的 PortfolioOptimizer 类
+class PortfolioOptimizer:
+    def __init__(self, 
+                 market_env: MarketEnvironment, 
+                 strategy: OptimizationStrategy = None,
+                 config: PortfolioConfig = None,
+                 monitor: PortfolioMonitor = None):
+        self.market_env = market_env
+        self.strategy = strategy or SharpeOptimizationStrategy()
+        self.config = config or PortfolioConfig()
+        self.monitor = monitor or PortfolioMonitor()
+        self.logger = PortfolioLogger("PortfolioOptimizer")
+        
+    def optimize(self, window_days: int = 30, current_date: datetime = None) -> Dict:
+        """Optimize portfolio weights
+        
+        Args:
+            window_days: Number of days to use for optimization window
+            current_date: Current date for optimization (for backtesting)
+            
+        Returns:
+            Dict: Optimized weights for each asset
+        """
+        try:
+            self.logger.logger.info(f"Starting portfolio optimization for date: {current_date}")
+            start_time = time.time()
+            
+            # Get returns for the specified window
+            returns = self.market_env.get_returns()
+            if current_date is not None:
+                # Get data up to current_date
+                returns = returns[returns.index <= current_date]
+                # Use only the last window_days
+                returns = returns.tail(window_days)
+            
+            result = self.strategy.optimize(
+                returns,
+                self.config.get('risk_free_rate', 0.02)
+            )
+            
+            end_time = time.time()
+            duration = end_time - start_time
+            
+            self.monitor.record_metric('optimization_duration', duration)
+            self.logger.logger.info(f"Optimization completed in {duration:.2f} seconds")
+            
+            return result
+            
+        except Exception as e:
+            self.logger.logger.error(f"Optimization failed: {str(e)}")
+            raise OptimizationError(str(e))
 
 class BackTester:
-    """Backtesting Framework"""
+    """回测框架"""
     
     def __init__(self, market_env: MarketEnvironment, optimizer: PortfolioOptimizer):
         self.market_env = market_env
         self.optimizer = optimizer
         
     def run_backtest(self, rebalance_frequency: str = '1M') -> pd.DataFrame:
-        """执行回测并回权重和收益的时间序列
+        """执行回测并返回权重和收益的时间序列
         
         Args:
             rebalance_frequency: 再平衡频率 ('1D' 每日, '1W' 每周, '1M' 每月等)
@@ -409,80 +645,53 @@ class BackTester:
         """
         returns = self.market_env.get_returns()
         
-        # Add error checking
         if returns.empty:
-            raise ValueError("Returns data is empty. Please check if market data was retrieved correctly.")
+            raise ValueError("Returns data is empty. Please check if market data was correctly retrieved.")
             
         portfolio_data = []
         window_days = 30
         asset_tickers = [asset.ticker for asset in self.market_env.assets]
 
-        # 确保开始日期有足够的历史数据用于优化
         start_date = returns.index[0] + pd.Timedelta(days=window_days)
         
         for date in pd.date_range(start=start_date, 
                                 end=returns.index[-1], 
                                 freq=rebalance_frequency):
             try:
-                # 使用30天窗口进行优化
-                current_weights = self.optimizer.optimize_sharpe(
+                # Pass current_date to optimize method
+                current_weights = self.optimizer.optimize(
                     window_days=window_days,
                     current_date=date
                 )
                 
-                # 计算当日收益
                 if date in returns.index:
                     daily_return = sum(returns.loc[date] * list(current_weights.values()))
                     
-                    # 创建包含所有信息的记录
                     record = {
                         'Date': date,
                         'Returns': daily_return
                     }
-                    # 添加每个资产的权重
                     for ticker, weight in current_weights.items():
                         record[f'{ticker}_weight'] = weight
                         
                     portfolio_data.append(record)
                     
             except Exception as e:
-                print(f"Error on date {date}: {str(e)}")
+                print(f"Error occurred on date {date}: {str(e)}")
                 continue
         
-        # 转换为DataFrame
         results = pd.DataFrame(portfolio_data)
         results.set_index('Date', inplace=True)
-        
-        # 确保按日期升序排列
         results = results.sort_index(ascending=True)
-        
-        # 分离权重列和收益列
-        weight_cols = [col for col in results.columns if col.endswith('_weight')]
-        
-        # 打印回测统计信息
-        print("\n=== 回测统计 ===")
-        print(f"回测期间: {results.index[0]} 到 {results.index[-1]}")
-        print(f"再平衡频率: {rebalance_frequency}")
-        print(f"总交易日数: {len(results)}")
-        
-        # 计算并打印基本指标
-        cumulative_return = (1 + results['Returns']).cumprod().iloc[-1] - 1
-        annual_return = results['Returns'].mean() * 252
-        annual_vol = results['Returns'].std() * np.sqrt(252)
-        sharpe_ratio = annual_return / annual_vol
-        
-        print(f"\n累计收益率: {cumulative_return:.2%}")
-        print(f"年化收益率: {annual_return:.2%}")
-        print(f"年化波动率: {annual_vol:.2%}")
-        print(f"夏普比率: {sharpe_ratio:.2f}")
         
         return results
 
 class PortfolioVisualizer:
     """Portfolio Visualization Tool"""
     
-    def __init__(self, backtester: BackTester):
+    def __init__(self, backtester: BackTester, strategy_name: str = "Default"):
         self.backtester = backtester
+        self.strategy_name = strategy_name
         plt.style.use('default')
         # Create directory for saving plots
         self.save_dir = 'portfolio_plots'
@@ -495,6 +704,9 @@ class PortfolioVisualizer:
         Args:
             filename: Name of the file
         """
+        # Add strategy name to filename
+        base_name, ext = os.path.splitext(filename)
+        filename = f"{base_name}_{self.strategy_name.replace(' ', '_').lower()}{ext}"
         save_path = os.path.join(self.save_dir, filename)
         plt.savefig(save_path, bbox_inches='tight', dpi=300)
         print(f"Plot saved to: {save_path}")
@@ -504,7 +716,7 @@ class PortfolioVisualizer:
         plt.figure(figsize=(12, 6))
         cumulative_returns = (1 + results['Returns']).cumprod()
         plt.plot(cumulative_returns.index, cumulative_returns.values, label='Portfolio Cumulative Returns')
-        plt.title('Portfolio Cumulative Performance')
+        plt.title(f'Portfolio Cumulative Performance - {self.strategy_name}')
         plt.xlabel('Date')
         plt.ylabel('Cumulative Returns')
         plt.legend()
@@ -519,7 +731,7 @@ class PortfolioVisualizer:
         labels = [asset.name for asset in weights.keys()]
         sizes = [weight * 100 for weight in weights.values()]
         plt.pie(sizes, labels=labels, autopct='%1.1f%%')
-        plt.title('Portfolio Asset Allocation')
+        plt.title(f'Portfolio Asset Allocation - {self.strategy_name}')
         plt.axis('equal')
         plt.show()
         self._save_plot('asset_weights.png')
@@ -533,12 +745,12 @@ class PortfolioVisualizer:
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
         
         ax1.plot(rolling_return.index, rolling_return.values, label='Annual Return')
-        ax1.set_title('Rolling Annual Return')
+        ax1.set_title(f'Rolling Annual Return - {self.strategy_name}')
         ax1.legend()
         ax1.grid(True)
         
         ax2.plot(rolling_vol.index, rolling_vol.values, label='Annual Volatility', color='orange')
-        ax2.set_title('Rolling Annual Volatility')
+        ax2.set_title(f'Rolling Annual Volatility - {self.strategy_name}')
         ax2.legend()
         ax2.grid(True)
         
@@ -548,11 +760,7 @@ class PortfolioVisualizer:
         plt.close()
 
     def plot_weights_timeline(self, weights_history: Dict[str, pd.Series]) -> None:
-        """Plot asset weights evolution over time
-        
-        Args:
-            weights_history: Dictionary containing weight series for each asset
-        """
+        """Plot asset weights evolution over time"""
         plt.figure(figsize=(12, 6))
         
         # Convert dictionary to DataFrame for easier plotting
@@ -566,7 +774,7 @@ class PortfolioVisualizer:
             linewidth=0
         )
         
-        plt.title('Portfolio Weights Evolution')
+        plt.title(f'Portfolio Weights Evolution - {self.strategy_name}')
         plt.xlabel('Date')
         plt.ylabel('Weight')
         plt.legend(title='Assets', bbox_to_anchor=(1.05, 1), loc='upper left')
@@ -583,11 +791,7 @@ class PortfolioVisualizer:
         plt.close()
 
     def plot_weights_heatmap(self, weights_history: Dict[str, pd.Series]) -> None:
-        """Plot asset weights heatmap over time
-        
-        Args:
-            weights_history: Dictionary containing weight series for each asset
-        """
+        """Plot asset weights heatmap over time"""
         plt.figure(figsize=(12, 8))
         
         # Convert dictionary to DataFrame
@@ -604,7 +808,7 @@ class PortfolioVisualizer:
             xticklabels=20  # Show fewer x-axis labels for clarity
         )
         
-        plt.title('Portfolio Weights Heatmap')
+        plt.title(f'Portfolio Weights Heatmap - {self.strategy_name}')
         plt.xlabel('Date')
         plt.ylabel('Asset')
         
@@ -615,62 +819,136 @@ class PortfolioVisualizer:
 
 # Main program example
 if __name__ == "__main__":
-    # Create different types of assets
-    bond = Bond("AGG", name="US Bond ETF", duration=6.7)
-    equity1 = Equity("SPY", name="S&P 500 ETF", sector="Large Cap")
-    equity2 = Equity("QQQ", name="NASDAQ ETF", sector="Technology")
-    fx = FX("EURUSD=X", name="EUR/USD", base_currency="EUR", quote_currency="USD")
+    try:
+        # Initialize configuration and monitoring
+        config = PortfolioConfig('C:/Users/zheng/.cursor-tutor/projects/python/portfolio_config.yaml')
+        monitor = PortfolioMonitor()        
+        
+        # Get configuration values
+        data_source = config.get('data.source')
+        risk_free_rate = config.get('optimization.risk_free_rate')
+        assets = config.get_assets()
+        
+        # Create asset list
+        portfolio_assets = []
+        for asset_config in assets:
+            if asset_config['type'] == 'equity':
+                asset = Equity(
+                    ticker=asset_config['ticker'],
+                    name=asset_config['name'],
+                    sector=asset_config['sector']
+                )
+            elif asset_config['type'] == 'bond':
+                asset = Bond(
+                    ticker=asset_config['ticker'],
+                    name=asset_config['name'],
+                    duration=asset_config['duration']
+                )
+            portfolio_assets.append(asset)
+            
+        # Create market environment
+        market_env = MarketEnvironment(
+            assets=portfolio_assets,
+            start_date=config.get('data.start_date'),
+            end_date=config.get('data.end_date'),
+            data_source=data_source,
+            debug=config.get('debug.verbose', False)
+        )
     
-    assets = [bond, equity1, equity2] #fx
-    
-    # Create market environment
-    market_env = MarketEnvironment(
-        assets=assets,
-        start_date='2020-01-01',
-        end_date='2023-12-31',
-        data_source='pandas_reader',  #'alpha_vantage'
-        debug=False  # 设置为True时会显示数据可视化
-    )
+        # Create and test different optimization strategies
+        strategies = {
+            "Sharpe Ratio": SharpeOptimizationStrategy(),
+            "Minimum Variance": MinVarianceOptimizationStrategy(),
+            "Maximum Return": MaxReturnOptimizationStrategy()
+        }
 
-    # Create optimizer
-    optimizer = PortfolioOptimizer(market_env)
+        # Initialize results dictionary to store performance metrics
+        results_summary = {}
 
-    # Create backtester
-    backtester = BackTester(market_env, optimizer)
+        # Test each strategy
+        for strategy_name, strategy in strategies.items():
+            print(f"\n{'='*20} Testing {strategy_name} Strategy {'='*20}")
+            
+            # Create optimizer with current strategy
+            optimizer = PortfolioOptimizer(
+                market_env=market_env,
+                strategy=strategy,
+                config=config,
+                monitor=monitor
+            )
+            
+            # Create backtester
+            backtester = BackTester(market_env, optimizer)
+            
+            # Run backtest
+            try:
+                backtest_results = backtester.run_backtest(
+                    rebalance_frequency=config.get('optimization.rebalance_frequency', '1M')
+                )
+                
+                # Create visualizer with strategy name
+                visualizer = PortfolioVisualizer(backtester, strategy_name)
+                
+                # Plot results
+                visualizer.plot_cumulative_returns(backtest_results)
+                
+                # Get weight-related columns
+                weight_cols = [col for col in backtest_results.columns if col.endswith('_weight')]
+                weights_history = {col.replace('_weight', ''): backtest_results[col] 
+                                 for col in weight_cols}
+                
+                # Plot weight timeline and heatmap
+                visualizer.plot_weights_timeline(weights_history)
+                visualizer.plot_weights_heatmap(weights_history)
+                
+                # Calculate performance metrics
+                returns = backtest_results['Returns']
+                cumulative_return = (1 + returns).cumprod().iloc[-1] - 1
+                annual_return = returns.mean() * 252
+                annual_vol = returns.std() * np.sqrt(252)
+                sharpe_ratio = (annual_return - risk_free_rate) / annual_vol
+                max_drawdown = (returns.cumprod() / returns.cumprod().cummax() - 1).min()
+                
+                # Store results
+                results_summary[strategy_name] = {
+                    'Cumulative Return': f"{cumulative_return:.2%}",
+                    'Annual Return': f"{annual_return:.2%}",
+                    'Annual Volatility': f"{annual_vol:.2%}",
+                    'Sharpe Ratio': f"{sharpe_ratio:.2f}",
+                    'Maximum Drawdown': f"{max_drawdown:.2%}"
+                }
+                
+                # Print current strategy results
+                print(f"\n=== Performance Metrics for {strategy_name} ===")
+                for metric, value in results_summary[strategy_name].items():
+                    print(f"{metric}: {value}")
+                
+                # Print final weights
+                print(f"\n=== Final Portfolio Weights ({strategy_name}) ===")
+                final_weights = backtest_results[weight_cols].iloc[-1]
+                for asset, weight in final_weights.items():
+                    print(f"{asset.replace('_weight', '')}: {weight:.2%}")
+                
+            except Exception as e:
+                print(f"Error during backtest for {strategy_name}: {str(e)}")
+                continue
 
-    # Run backtest
-    results = backtester.run_backtest(rebalance_frequency='1M')
-
-    # Create visualizer
-    visualizer = PortfolioVisualizer(backtester)
-
-    # Show various visualizations
-    visualizer.plot_cumulative_returns(results)
-    
-    # 获取权重相关的列
-    weight_cols = [col for col in results.columns if col.endswith('_weight')]
-    weights_history = {col.replace('_weight', ''): results[col] for col in weight_cols}
-    
-    # Plot weights timeline and heatmap
-    visualizer.plot_weights_timeline(weights_history)
-    visualizer.plot_weights_heatmap(weights_history)
-
-    # Print final performance statistics
-    final_value = (1 + results['Returns']).cumprod().iloc[-1]
-    annual_return = results['Returns'].mean() * 252
-    annual_vol = results['Returns'].std() * np.sqrt(252)
-    sharpe_ratio = annual_return / annual_vol
-    
-    print("\n=== Portfolio Performance Statistics ===")
-    print(f"Cumulative Return: {(final_value - 1):.2%}")
-    print(f"Annual Return: {annual_return:.2%}")
-    print(f"Annual Volatility: {annual_vol:.2%}")
-    print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
-
-    # 打印最终权重分配
-    print("\n=== Final Portfolio Weights ===")
-    final_weights = results[weight_cols].iloc[-1]
-    for asset, weight in final_weights.items():
-        print(f"{asset.replace('_weight', '')}: {weight:.2%}")
+        # Print comparative results
+        print("\n=== Strategy Comparison ===")
+        comparison_df = pd.DataFrame(results_summary).T
+        print(comparison_df)
+        
+        # Save results to CSV
+        results_dir = 'results'
+        if not os.path.exists(results_dir):
+            os.makedirs(results_dir)
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        comparison_df.to_csv(f'{results_dir}/strategy_comparison_{timestamp}.csv')
+        print(f"\nResults saved to: {results_dir}/strategy_comparison_{timestamp}.csv")
+        
+    except Exception as e:
+        logging.error(f"Portfolio operation failed: {str(e)}")
+        raise
 
 
